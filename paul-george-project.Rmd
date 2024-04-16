@@ -1,0 +1,556 @@
+---
+title: "paul-george-project"
+author: "Morgan, Nate"
+date: "2024-04-11"
+output: pdf_document
+---
+
+# Loading Data and Packages
+
+```{r load}
+pacman::p_load(tidyverse, hoopR) #load the hoopR package
+#citation for hoopR
+#@misc{gilani_2021_hoopR,
+  #author = {Gilani, Saiem},
+  #title = {hoopR: The SportsDataverse's R Package for Men's Basketball Data.},
+  #url = {https://hoopR.sportsdataverse.org},
+ # year = {2021}
+#}
+```
+
+```{r boxscore2002-2024}
+nba_player_box <- hoopR::load_nba_player_box(2002:hoopR::most_recent_nba_season())
+nba_team_box <- hoopR::load_nba_team_box(2002:hoopR::most_recent_nba_season())
+#load NBA player box and nba team box scores from 2002 to the most recent NBA season
+```
+
+# First NBA Visualization(projected growth based on stats for pre-injury Paul compared to actual growth)
+
+```{r pgdataclean}
+paulGeorgeCareer <- nba_player_box%>% # save data for paul george box scores 
+  select(c("game_id":"team_uid"))%>% # get only certain columns
+  filter(athlete_display_name =="Paul George", #only for pg
+         season_type == "2", #only the regular season
+         team_id =="11"| team_id == "25"| team_id=="12",
+         !is.na(minutes))%>% #remove all star games
+  mutate(team_year = str_c(season,team_id)) #used for factor value later
+
+pgteamyears = unique(paulGeorgeCareer$team_year) #factor value of PG years and team
+pgGamesPlayed = unique(paulGeorgeCareer$game_id)
+
+nba_team_box <- nba_team_box %>%
+  mutate(team_year = str_c(season,team_id))#make the factor value to sort the game pg is in
+
+paulGeorgeTeam <- nba_team_box%>% #data frame for the team box score
+  select(c("game_id":"turnovers", "team_year"))%>% # select certain columns
+  filter(season_type == "2", game_id %in% pgGamesPlayed) #get the games that PG's teams plays 
+paulGeorgeTeamFor <- paulGeorgeTeam%>%
+  filter(team_year %in% pgteamyears)
+paulGeorgeTeamAgainst <- paulGeorgeTeam%>%
+  filter(!(team_year %in% pgteamyears))
+paulGeorgeTeamBothSides <- paulGeorgeTeamFor %>%
+  left_join(paulGeorgeTeamAgainst, by = "game_id")
+```
+
+```{r per100pos}
+paulGeorgeTeamPer100 <- paulGeorgeTeamBothSides%>%
+  mutate(possessions_forPGTeam = (field_goals_attempted.x-offensive_rebounds.x)+turnovers.x+(.44*free_throws_attempted.x))%>%
+  filter(game_id %in% pgGamesPlayed)
+
+paulGeorgePer100 <- paulGeorgeCareer%>%
+  left_join(paulGeorgeTeamPer100, by = "game_id")%>%
+   rename_all(~sub("\\.x$", "_PGTeam", .))%>%
+  rename_all(~sub("\\.y$", "_OtherTeam",.))
+
+
+paulGeorgePer100 <- paulGeorgePer100%>%
+  filter(!is.na(minutes))%>%
+  mutate(
+         fgm_per100 = field_goals_made/possessions_forPGTeam*100,
+         fga_per100 = field_goals_attempted/possessions_forPGTeam*100,
+         fg3m_per100 = three_point_field_goals_made/possessions_forPGTeam*100,
+         fg3a_per100 = three_point_field_goals_attempted/possessions_forPGTeam*100,
+         fg2m_per100 = ((field_goals_made-three_point_field_goals_made)/possessions_forPGTeam)*100,
+         fg2a_per100 = ((field_goals_attempted-three_point_field_goals_attempted)/possessions_forPGTeam)*100,
+         ft_per100 = free_throws_made/possessions_forPGTeam*100,
+         fta_per100 = free_throws_attempted/possessions_forPGTeam*100,
+         oreb_per100 = offensive_rebounds/possessions_forPGTeam*100,
+         dreb_per100 = defensive_rebounds/possessions_forPGTeam*100,
+         reb_per100 = rebounds/possessions_forPGTeam*100,
+         ass_per100 = assists/possessions_forPGTeam*100,
+         steals_per100 = steals/possessions_forPGTeam*100,
+         blocks_per100 = blocks/possessions_forPGTeam*100,
+         turn_per100 = turnovers/possessions_forPGTeam*100,
+         fouls_per100 = fouls/possessions_forPGTeam*100,
+         points_per100 = points/possessions_forPGTeam*100)%>%select(c("game_id":"season_type","athlete_id":"team_name","minutes":"points","athlete_position_abbreviation","team_id_PGTeam","team_name_PGTeam","team_score_PGTeam":"turnovers_PGTeam","team_id_OtherTeam", "team_name_OtherTeam","team_score_OtherTeam":"turnovers_OtherTeam","possessions_forPGTeam":"points_per100"))
+paulGeorgePer100 <- paulGeorgePer100%>%
+  mutate(
+    qAST = ((minutes / (48 / 5)) * (1.14 * ((assists_PGTeam - assists) / field_goals_made_PGTeam))) + ((((assists_PGTeam / 48) * minutes * 5 - assists) / ((field_goals_made_PGTeam / 48) * minutes * 5 - field_goals_made)) * (1 - (minutes / (48 / 5)))),
+    FG_Part = field_goals_made * (1 - 0.5 * ((points - free_throws_made) / (2 * field_goals_attempted)) * qAST),
+    AST_Part = 0.5 * (((team_score_PGTeam - free_throws_made_PGTeam) - (points - free_throws_made)) / (2 * (field_goals_attempted_PGTeam - field_goals_attempted))) * assists,
+    FT_Part = (1-(1-(free_throws_made/free_throws_attempted))^2)*0.4*free_throws_attempted,
+    Team_Scoring_Poss = field_goals_made_PGTeam + (1 - (1 - (free_throws_made_PGTeam / free_throws_attempted_PGTeam))^2) * free_throws_attempted_PGTeam * 0.4,
+    Team_PlayPerc = Team_Scoring_Poss / (field_goals_attempted_PGTeam + free_throws_attempted_PGTeam * 0.4 + total_turnovers_PGTeam),
+    Team_ORBPerc = offensive_rebounds_PGTeam / (total_rebounds_PGTeam+(total_rebounds_OtherTeam-offensive_rebounds_OtherTeam)),
+    Team_ORB_Weight = ((1 - Team_ORBPerc) * Team_PlayPerc) / ((1 - Team_ORBPerc) * Team_PlayPerc + Team_ORBPerc * (1 - Team_PlayPerc)),
+    ORB_Part = offensive_rebounds * Team_ORB_Weight * Team_PlayPerc,
+    FGxPoss = (field_goals_attempted - field_goals_made) * (1 - 1.07 * Team_ORBPerc),
+    FTxPoss = ((1 - (free_throws_made / free_throws_attempted))^2) * 0.4 * free_throws_attempted,
+    PProd_FG_Part = 2 * (field_goals_made + 0.5 * three_point_field_goals_made) * (1 - 0.5 * ((points - free_throws_made) / (2 * field_goals_attempted)) * qAST),
+    PProd_AST_Part = 2 * ((field_goals_made_PGTeam - field_goals_made + 0.5 * (three_point_field_goals_made_PGTeam - three_point_field_goals_made)) / (field_goals_made_PGTeam - field_goals_made)) * 0.5 * (((team_score_PGTeam - free_throws_made_PGTeam) - (points - free_throws_made)) / (2 * (field_goals_attempted_PGTeam - field_goals_attempted))) * assists
+    )
+
+paulGeorgePer100$FT_Part[is.na(paulGeorgePer100$FT_Part)] <- 0
+paulGeorgePer100$FTxPoss[is.na(paulGeorgePer100$FTxPoss)] <- 0
+paulGeorgePer100$PProd_FG_Part[is.na(paulGeorgePer100$PProd_FG_Part)]<-0
+paulGeorgePer100$FG_Part[is.na(paulGeorgePer100$FG_Part)]<- 0
+
+paulGeorgePer100 <- paulGeorgePer100%>%
+  mutate(
+    PProd_ORB_Part = offensive_rebounds * Team_ORB_Weight * Team_PlayPerc * (team_score_PGTeam / (field_goals_made_PGTeam + (1 - (1 - (free_throws_made_PGTeam / free_throws_attempted_PGTeam))^2) * 0.4 * free_throws_attempted_PGTeam)),
+    PProd = (PProd_FG_Part + PProd_AST_Part + free_throws_made) * (1 - (offensive_rebounds_PGTeam / Team_Scoring_Poss) * Team_ORB_Weight * Team_PlayPerc) + PProd_ORB_Part,
+    ScPoss = (FG_Part + AST_Part + FT_Part) * (1 - (offensive_rebounds_PGTeam / Team_Scoring_Poss) * Team_ORB_Weight * Team_PlayPerc) + ORB_Part,
+    TotPoss = ScPoss + FGxPoss + FTxPoss + turnovers,
+    ORtg = 100 * (PProd / TotPoss),
+    FloorPercent = ScPoss / TotPoss
+)
+
+paulGeorgePer100 <- paulGeorgePer100%>%
+  mutate(
+    career_game_number = row_number()
+  )
+
+```
+
+```{r visualization}
+ggplot(paulGeorgePer100, aes(x = career_game_number, y = ORtg))+
+ geom_point()+
+  geom_smooth()+
+  labs()
+```
+
+# Second NBA Visualization using Jayson Tatum, Kawhi, Jimmy Butler, Carmelo as counter factuals
+
+```{r jtcareer}
+jaysonTatumCareer <- nba_player_box%>% # save data for paul george box scores 
+  select(c("game_id":"team_uid"))%>% # get only certain columns
+  filter(athlete_display_name =="Jayson Tatum", #only for pg
+         season_type == "2", #only the regular season
+         team_id =="2",
+         !is.na(minutes))%>% #remove all star games
+  mutate(team_year = str_c(season,team_id)) #used for factor value later
+
+jaysontatumteamyears = unique(jaysonTatumCareer$team_year) #factor value of PG years and team
+jaysontatumGamesPlayed = unique(jaysonTatumCareer$game_id)
+
+nba_team_box <- nba_team_box %>%
+  mutate(team_year = str_c(season,team_id))#make the factor value to sort the game pg is in
+
+jaysonTatumTeam <- nba_team_box%>% #data frame for the team box score
+  select(c("game_id":"turnovers", "team_year"))%>% # select certain columns
+  filter(season_type == "2", game_id %in% jaysontatumGamesPlayed) #get the games that PG's teams plays 
+jaysonTatumTeamFor <- jaysonTatumTeam%>%
+  filter(team_year %in% jaysontatumteamyears)
+jaysonTatumTeamAgainst <- jaysonTatumTeam%>%
+  filter(!(team_year %in% jaysontatumteamyears))
+jaysonTatumTeamBothSides <- jaysonTatumTeamFor %>%
+  left_join(jaysonTatumTeamAgainst, by = "game_id")
+```
+
+```{r per100posjt}
+jaysonTatumTeamPer100 <- jaysonTatumTeamBothSides%>%
+  mutate(possessions_forJTTeam = (field_goals_attempted.x-offensive_rebounds.x)+turnovers.x+(.44*free_throws_attempted.x))%>%
+  filter(game_id %in% jaysontatumGamesPlayed)
+
+jaysonTatumPer100 <- jaysonTatumCareer%>%
+  left_join(jaysonTatumTeamPer100, by = "game_id")%>%
+   rename_all(~sub("\\.x$", "_JTTeam", .))%>%
+  rename_all(~sub("\\.y$", "_OtherTeam",.))
+
+
+jaysonTatumPer100 <- jaysonTatumPer100%>%
+  filter(!is.na(minutes))%>%
+  mutate(
+         fgm_per100 = field_goals_made/possessions_forJTTeam*100,
+         fga_per100 = field_goals_attempted/possessions_forJTTeam*100,
+         fg3m_per100 = three_point_field_goals_made/possessions_forJTTeam*100,
+         fg3a_per100 = three_point_field_goals_attempted/possessions_forJTTeam*100,
+         fg2m_per100 = ((field_goals_made-three_point_field_goals_made)/possessions_forJTTeam)*100,
+         fg2a_per100 = ((field_goals_attempted-three_point_field_goals_attempted)/possessions_forJTTeam)*100,
+         ft_per100 = free_throws_made/possessions_forJTTeam*100,
+         fta_per100 = free_throws_attempted/possessions_forJTTeam*100,
+         oreb_per100 = offensive_rebounds/possessions_forJTTeam*100,
+         dreb_per100 = defensive_rebounds/possessions_forJTTeam*100,
+         reb_per100 = rebounds/possessions_forJTTeam*100,
+         ass_per100 = assists/possessions_forJTTeam*100,
+         steals_per100 = steals/possessions_forJTTeam*100,
+         blocks_per100 = blocks/possessions_forJTTeam*100,
+         turn_per100 = turnovers/possessions_forJTTeam*100,
+         fouls_per100 = fouls/possessions_forJTTeam*100,
+         points_per100 = points/possessions_forJTTeam*100)%>%select(c("game_id":"season_type","athlete_id":"team_name","minutes":"points","athlete_position_abbreviation","team_id_JTTeam","team_name_JTTeam","team_score_JTTeam":"turnovers_JTTeam","team_id_OtherTeam", "team_name_OtherTeam","team_score_OtherTeam":"turnovers_OtherTeam","possessions_forJTTeam":"points_per100"))
+
+jaysonTatumPer100 <- jaysonTatumPer100%>%
+  mutate(
+    qAST = ((minutes / (48 / 5)) * (1.14 * ((assists_JTTeam - assists) / field_goals_made_JTTeam))) + ((((assists_JTTeam / 48) * minutes * 5 - assists) / ((field_goals_made_JTTeam / 48) * minutes * 5 - field_goals_made)) * (1 - (minutes / (48 / 5)))),
+    FG_Part = field_goals_made * (1 - 0.5 * ((points - free_throws_made) / (2 * field_goals_attempted)) * qAST),
+    AST_Part = 0.5 * (((team_score_JTTeam - free_throws_made_JTTeam) - (points - free_throws_made)) / (2 * (field_goals_attempted_JTTeam - field_goals_attempted))) * assists,
+    FT_Part = (1-(1-(free_throws_made/free_throws_attempted))^2)*0.4*free_throws_attempted,
+    Team_Scoring_Poss = field_goals_made_JTTeam + (1 - (1 - (free_throws_made_JTTeam / free_throws_attempted_JTTeam))^2) * free_throws_attempted_JTTeam * 0.4,
+    Team_PlayPerc = Team_Scoring_Poss / (field_goals_attempted_JTTeam + free_throws_attempted_JTTeam * 0.4 + total_turnovers_JTTeam),
+    Team_ORBPerc = offensive_rebounds_JTTeam / (total_rebounds_JTTeam+(total_rebounds_OtherTeam-offensive_rebounds_OtherTeam)),
+    Team_ORB_Weight = ((1 - Team_ORBPerc) * Team_PlayPerc) / ((1 - Team_ORBPerc) * Team_PlayPerc + Team_ORBPerc * (1 - Team_PlayPerc)),
+    ORB_Part = offensive_rebounds * Team_ORB_Weight * Team_PlayPerc,
+    FGxPoss = (field_goals_attempted - field_goals_made) * (1 - 1.07 * Team_ORBPerc),
+    FTxPoss = ((1 - (free_throws_made / free_throws_attempted))^2) * 0.4 * free_throws_attempted,
+    PProd_FG_Part = 2 * (field_goals_made + 0.5 * three_point_field_goals_made) * (1 - 0.5 * ((points - free_throws_made) / (2 * field_goals_attempted)) * qAST),
+    PProd_AST_Part = 2 * ((field_goals_made_JTTeam - field_goals_made + 0.5 * (three_point_field_goals_made_JTTeam - three_point_field_goals_made)) / (field_goals_made_JTTeam - field_goals_made)) * 0.5 * (((team_score_JTTeam - free_throws_made_JTTeam) - (points - free_throws_made)) / (2 * (field_goals_attempted_JTTeam - field_goals_attempted))) * assists
+    )
+
+jaysonTatumPer100$FT_Part[is.na(jaysonTatumPer100$FT_Part)] <- 0
+jaysonTatumPer100$FTxPoss[is.na(jaysonTatumPer100$FTxPoss)] <- 0
+jaysonTatumPer100$PProd_FG_Part[is.na(jaysonTatumPer100$PProd_FG_Part)]<-0
+jaysonTatumPer100$FG_Part[is.na(jaysonTatumPer100$FG_Part)]<- 0
+
+jaysonTatumPer100 <- jaysonTatumPer100%>%
+  mutate(
+    PProd_ORB_Part = offensive_rebounds * Team_ORB_Weight * Team_PlayPerc * (team_score_JTTeam / (field_goals_made_JTTeam + (1 - (1 - (free_throws_made_JTTeam / free_throws_attempted_JTTeam))^2) * 0.4 * free_throws_attempted_JTTeam)),
+    PProd = (PProd_FG_Part + PProd_AST_Part + free_throws_made) * (1 - (offensive_rebounds_JTTeam / Team_Scoring_Poss) * Team_ORB_Weight * Team_PlayPerc) + PProd_ORB_Part,
+    ScPoss = (FG_Part + AST_Part + FT_Part) * (1 - (offensive_rebounds_JTTeam / Team_Scoring_Poss) * Team_ORB_Weight * Team_PlayPerc) + ORB_Part,
+    TotPoss = ScPoss + FGxPoss + FTxPoss + turnovers,
+    ORtg = 100 * (PProd / TotPoss),
+    FloorPercent = ScPoss / TotPoss
+)
+
+jaysonTatumPer100 <- jaysonTatumPer100%>%
+  mutate(
+    career_game_number = row_number()
+  )
+
+```
+
+```{r visualizationjt}
+ggplot(jaysonTatumPer100, aes(x = career_game_number, y = ORtg))+
+ geom_point()+
+  geom_smooth()+
+  labs()
+```
+
+This graph above is for the NBA player jayson tatum the counterfactual here is the same position and are both all star level players. I would also say that Jayson Tatum wasn't forced into being a franchise saver but was allowed to develop his game style and learn the NBA level at a slower pace as he wasnt forced in to it just like how Paul George was.
+
+```{r kwahileonard}
+kawhiCareer <- nba_player_box%>% # save data for paul george box scores 
+  select(c("game_id":"team_uid"))%>% # get only certain columns
+  filter(athlete_display_name =="Kawhi Leonard", #only for pg
+         season_type == "2", #only the regular season
+         team_id =="24"| team_id == "28"|team_id == "12",
+         !is.na(minutes))%>% #remove all star games
+  mutate(team_year = str_c(season,team_id)) #used for factor value later
+
+kawhiteamyears = unique(kawhiCareer$team_year) #factor value of PG years and team
+kawhiGamesPlayed = unique(kawhiCareer$game_id)
+
+nba_team_box <- nba_team_box %>%
+  mutate(team_year = str_c(season,team_id))#make the factor value to sort the game pg is in
+
+kawhiTeam <- nba_team_box%>% #data frame for the team box score
+  select(c("game_id":"turnovers", "team_year"))%>% # select certain columns
+  filter(season_type == "2", game_id %in% kawhiGamesPlayed) #get the games that PG's teams plays 
+kawhiTeamFor <- kawhiTeam%>%
+  filter(team_year %in% kawhiteamyears)
+kawhiTeamAgainst <- kawhiTeam%>%
+  filter(!(team_year %in% kawhiteamyears))
+kawhiTeamBothSides <- kawhiTeamFor %>%
+  left_join(kawhiTeamAgainst, by = "game_id")
+```
+
+```{r per100poskawhi}
+kawhiTeamPer100 <- kawhiTeamBothSides%>%
+  mutate(possessions_forKLTeam = (field_goals_attempted.x-offensive_rebounds.x)+turnovers.x+(.44*free_throws_attempted.x))%>%
+  filter(game_id %in% kawhiGamesPlayed)
+
+kawhiPer100 <- kawhiCareer%>%
+  left_join(kawhiTeamPer100, by = "game_id")%>%
+   rename_all(~sub("\\.x$", "_KLTeam", .))%>%
+  rename_all(~sub("\\.y$", "_OtherTeam",.))
+
+
+kawhiPer100 <- kawhiPer100%>%
+  filter(!is.na(minutes))%>%
+  mutate(
+         fgm_per100 = field_goals_made/possessions_forKLTeam*100,
+         fga_per100 = field_goals_attempted/possessions_forKLTeam*100,
+         fg3m_per100 = three_point_field_goals_made/possessions_forKLTeam*100,
+         fg3a_per100 = three_point_field_goals_attempted/possessions_forKLTeam*100,
+         fg2m_per100 = ((field_goals_made-three_point_field_goals_made)/possessions_forKLTeam)*100,
+         fg2a_per100 = ((field_goals_attempted-three_point_field_goals_attempted)/possessions_forKLTeam)*100,
+         ft_per100 = free_throws_made/possessions_forKLTeam*100,
+         fta_per100 = free_throws_attempted/possessions_forKLTeam*100,
+         oreb_per100 = offensive_rebounds/possessions_forKLTeam*100,
+         dreb_per100 = defensive_rebounds/possessions_forKLTeam*100,
+         reb_per100 = rebounds/possessions_forKLTeam*100,
+         ass_per100 = assists/possessions_forKLTeam*100,
+         steals_per100 = steals/possessions_forKLTeam*100,
+         blocks_per100 = blocks/possessions_forKLTeam*100,
+         turn_per100 = turnovers/possessions_forKLTeam*100,
+         fouls_per100 = fouls/possessions_forKLTeam*100,
+         points_per100 = points/possessions_forKLTeam*100)%>%select(c("game_id":"season_type","athlete_id":"team_name","minutes":"points","athlete_position_abbreviation","team_id_KLTeam","team_name_KLTeam","team_score_KLTeam":"turnovers_KLTeam","team_id_OtherTeam", "team_name_OtherTeam","team_score_OtherTeam":"turnovers_OtherTeam","possessions_forKLTeam":"points_per100"))
+
+kawhiPer100 <- kawhiPer100%>%
+  mutate(
+    qAST = ((minutes / (48 / 5)) * (1.14 * ((assists_KLTeam - assists) / field_goals_made_KLTeam))) + ((((assists_KLTeam / 48) * minutes * 5 - assists) / ((field_goals_made_KLTeam / 48) * minutes * 5 - field_goals_made)) * (1 - (minutes / (48 / 5)))),
+    FG_Part = field_goals_made * (1 - 0.5 * ((points - free_throws_made) / (2 * field_goals_attempted)) * qAST),
+    AST_Part = 0.5 * (((team_score_KLTeam - free_throws_made_KLTeam) - (points - free_throws_made)) / (2 * (field_goals_attempted_KLTeam - field_goals_attempted))) * assists,
+    FT_Part = (1-(1-(free_throws_made/free_throws_attempted))^2)*0.4*free_throws_attempted,
+    Team_Scoring_Poss = field_goals_made_KLTeam + (1 - (1 - (free_throws_made_KLTeam / free_throws_attempted_KLTeam))^2) * free_throws_attempted_KLTeam * 0.4,
+    Team_PlayPerc = Team_Scoring_Poss / (field_goals_attempted_KLTeam + free_throws_attempted_KLTeam * 0.4 + total_turnovers_KLTeam),
+    Team_ORBPerc = offensive_rebounds_KLTeam / (total_rebounds_KLTeam+(total_rebounds_OtherTeam-offensive_rebounds_OtherTeam)),
+    Team_ORB_Weight = ((1 - Team_ORBPerc) * Team_PlayPerc) / ((1 - Team_ORBPerc) * Team_PlayPerc + Team_ORBPerc * (1 - Team_PlayPerc)),
+    ORB_Part = offensive_rebounds * Team_ORB_Weight * Team_PlayPerc,
+    FGxPoss = (field_goals_attempted - field_goals_made) * (1 - 1.07 * Team_ORBPerc),
+    FTxPoss = ((1 - (free_throws_made / free_throws_attempted))^2) * 0.4 * free_throws_attempted,
+    PProd_FG_Part = 2 * (field_goals_made + 0.5 * three_point_field_goals_made) * (1 - 0.5 * ((points - free_throws_made) / (2 * field_goals_attempted)) * qAST),
+    PProd_AST_Part = 2 * ((field_goals_made_KLTeam - field_goals_made + 0.5 * (three_point_field_goals_made_KLTeam - three_point_field_goals_made)) / (field_goals_made_KLTeam - field_goals_made)) * 0.5 * (((team_score_KLTeam - free_throws_made_KLTeam) - (points - free_throws_made)) / (2 * (field_goals_attempted_KLTeam - field_goals_attempted))) * assists
+    )
+
+kawhiPer100$FT_Part[is.na(kawhiPer100$FT_Part)] <- 0
+kawhiPer100$FTxPoss[is.na(kawhiPer100$FTxPoss)] <- 0
+kawhiPer100$PProd_FG_Part[is.na(kawhiPer100$PProd_FG_Part)]<-0
+kawhiPer100$FG_Part[is.na(kawhiPer100$FG_Part)]<- 0
+
+kawhiPer100 <- kawhiPer100%>%
+  mutate(
+    PProd_ORB_Part = offensive_rebounds * Team_ORB_Weight * Team_PlayPerc * (team_score_KLTeam / (field_goals_made_KLTeam + (1 - (1 - (free_throws_made_KLTeam / free_throws_attempted_KLTeam))^2) * 0.4 * free_throws_attempted_KLTeam)),
+    PProd = (PProd_FG_Part + PProd_AST_Part + free_throws_made) * (1 - (offensive_rebounds_KLTeam / Team_Scoring_Poss) * Team_ORB_Weight * Team_PlayPerc) + PProd_ORB_Part,
+    ScPoss = (FG_Part + AST_Part + FT_Part) * (1 - (offensive_rebounds_KLTeam / Team_Scoring_Poss) * Team_ORB_Weight * Team_PlayPerc) + ORB_Part,
+    TotPoss = ScPoss + FGxPoss + FTxPoss + turnovers,
+    ORtg = 100 * (PProd / TotPoss),
+    FloorPercent = ScPoss / TotPoss
+)
+
+kawhiPer100 <- kawhiPer100%>%
+  mutate(
+    career_game_number = row_number()
+  )
+
+```
+
+```{r visualizationkawhi}
+ggplot(kawhiPer100, aes(x = career_game_number, y = ORtg))+
+ geom_point()+
+  geom_smooth()+
+  labs()
+```
+
+This is the graph of Kawhi Leonard plays a similar position and was drafted one year after paul george. Both players are all stars and are forwards. Kawhi also was allowed time to develop as he was sent to the spurs which at the time had a good team already
+
+```{r himmybutler}
+jimmyButlerCareer <- nba_player_box%>% # save data for paul george box scores 
+  select(c("game_id":"team_uid"))%>% # get only certain columns
+  filter(athlete_display_name =="Jimmy Butler", #only for pg
+         season_type == "2", #only the regular season
+         team_id =="4"| team_id == "16" | team_id == "20" | team_id == "14",
+         !is.na(minutes))%>% #remove all star games
+  mutate(team_year = str_c(season,team_id)) #used for factor value later
+
+jimmyButlerteamyears = unique(jimmyButlerCareer$team_year) #factor value of PG years and team
+jimmyButlerGamesPlayed = unique(jimmyButlerCareer$game_id)
+
+nba_team_box <- nba_team_box %>%
+  mutate(team_year = str_c(season,team_id))#make the factor value to sort the game pg is in
+
+jimmyButlerTeam <- nba_team_box%>% #data frame for the team box score
+  select(c("game_id":"turnovers", "team_year"))%>% # select certain columns
+  filter(season_type == "2", game_id %in% jimmyButlerGamesPlayed) #get the games that PG's teams plays 
+jimmyButlerTeamFor <- jimmyButlerTeam%>%
+  filter(team_year %in% jimmyButlerteamyears)
+jimmyButlerTeamAgainst <- jimmyButlerTeam%>%
+  filter(!(team_year %in% jimmyButlerteamyears))
+jimmyButlerTeamBothSides <- jimmyButlerTeamFor %>%
+  left_join(jimmyButlerTeamAgainst, by = "game_id")
+```
+
+```{r per100posJB}
+jimmyButlerTeamPer100 <- jimmyButlerTeamBothSides%>%
+  mutate(possessions_forJBTeam = (field_goals_attempted.x-offensive_rebounds.x)+turnovers.x+(.44*free_throws_attempted.x))%>%
+  filter(game_id %in% jimmyButlerGamesPlayed)
+
+jimmyButlerPer100 <- jimmyButlerCareer%>%
+  left_join(jimmyButlerTeamPer100, by = "game_id")%>%
+   rename_all(~sub("\\.x$", "_JBTeam", .))%>%
+  rename_all(~sub("\\.y$", "_OtherTeam",.))
+
+
+jimmyButlerPer100 <- jimmyButlerPer100%>%
+  filter(!is.na(minutes))%>%
+  mutate(
+         fgm_per100 = field_goals_made/possessions_forJBTeam*100,
+         fga_per100 = field_goals_attempted/possessions_forJBTeam*100,
+         fg3m_per100 = three_point_field_goals_made/possessions_forJBTeam*100,
+         fg3a_per100 = three_point_field_goals_attempted/possessions_forJBTeam*100,
+         fg2m_per100 = ((field_goals_made-three_point_field_goals_made)/possessions_forJBTeam)*100,
+         fg2a_per100 = ((field_goals_attempted-three_point_field_goals_attempted)/possessions_forJBTeam)*100,
+         ft_per100 = free_throws_made/possessions_forJBTeam*100,
+         fta_per100 = free_throws_attempted/possessions_forJBTeam*100,
+         oreb_per100 = offensive_rebounds/possessions_forJBTeam*100,
+         dreb_per100 = defensive_rebounds/possessions_forJBTeam*100,
+         reb_per100 = rebounds/possessions_forJBTeam*100,
+         ass_per100 = assists/possessions_forJBTeam*100,
+         steals_per100 = steals/possessions_forJBTeam*100,
+         blocks_per100 = blocks/possessions_forJBTeam*100,
+         turn_per100 = turnovers/possessions_forJBTeam*100,
+         fouls_per100 = fouls/possessions_forJBTeam*100,
+         points_per100 = points/possessions_forJBTeam*100)%>%select(c("game_id":"season_type","athlete_id":"team_name","minutes":"points","athlete_position_abbreviation","team_id_JBTeam","team_name_JBTeam","team_score_JBTeam":"turnovers_JBTeam","team_id_OtherTeam", "team_name_OtherTeam","team_score_OtherTeam":"turnovers_OtherTeam","possessions_forJBTeam":"points_per100"))
+
+jimmyButlerPer100 <- jimmyButlerPer100%>%
+  mutate(
+    qAST = ((minutes / (48 / 5)) * (1.14 * ((assists_JBTeam - assists) / field_goals_made_JBTeam))) + ((((assists_JBTeam / 48) * minutes * 5 - assists) / ((field_goals_made_JBTeam / 48) * minutes * 5 - field_goals_made)) * (1 - (minutes / (48 / 5)))),
+    FG_Part = field_goals_made * (1 - 0.5 * ((points - free_throws_made) / (2 * field_goals_attempted)) * qAST),
+    AST_Part = 0.5 * (((team_score_JBTeam - free_throws_made_JBTeam) - (points - free_throws_made)) / (2 * (field_goals_attempted_JBTeam - field_goals_attempted))) * assists,
+    FT_Part = (1-(1-(free_throws_made/free_throws_attempted))^2)*0.4*free_throws_attempted,
+    Team_Scoring_Poss = field_goals_made_JBTeam + (1 - (1 - (free_throws_made_JBTeam / free_throws_attempted_JBTeam))^2) * free_throws_attempted_JBTeam * 0.4,
+    Team_PlayPerc = Team_Scoring_Poss / (field_goals_attempted_JBTeam + free_throws_attempted_JBTeam * 0.4 + total_turnovers_JBTeam),
+    Team_ORBPerc = offensive_rebounds_JBTeam / (total_rebounds_JBTeam+(total_rebounds_OtherTeam-offensive_rebounds_OtherTeam)),
+    Team_ORB_Weight = ((1 - Team_ORBPerc) * Team_PlayPerc) / ((1 - Team_ORBPerc) * Team_PlayPerc + Team_ORBPerc * (1 - Team_PlayPerc)),
+    ORB_Part = offensive_rebounds * Team_ORB_Weight * Team_PlayPerc,
+    FGxPoss = (field_goals_attempted - field_goals_made) * (1 - 1.07 * Team_ORBPerc),
+    FTxPoss = ((1 - (free_throws_made / free_throws_attempted))^2) * 0.4 * free_throws_attempted,
+    PProd_FG_Part = 2 * (field_goals_made + 0.5 * three_point_field_goals_made) * (1 - 0.5 * ((points - free_throws_made) / (2 * field_goals_attempted)) * qAST),
+    PProd_AST_Part = 2 * ((field_goals_made_JBTeam - field_goals_made + 0.5 * (three_point_field_goals_made_JBTeam - three_point_field_goals_made)) / (field_goals_made_JBTeam - field_goals_made)) * 0.5 * (((team_score_JBTeam - free_throws_made_JBTeam) - (points - free_throws_made)) / (2 * (field_goals_attempted_JBTeam - field_goals_attempted))) * assists
+    )
+
+jimmyButlerPer100$FT_Part[is.na(jimmyButlerPer100$FT_Part)] <- 0
+jimmyButlerPer100$FTxPoss[is.na(jimmyButlerPer100$FTxPoss)] <- 0
+jimmyButlerPer100$PProd_FG_Part[is.na(jimmyButlerPer100$PProd_FG_Part)]<-0
+jimmyButlerPer100$FG_Part[is.na(jimmyButlerPer100$FG_Part)]<- 0
+
+jimmyButlerPer100 <- jimmyButlerPer100%>%
+  mutate(
+    PProd_ORB_Part = offensive_rebounds * Team_ORB_Weight * Team_PlayPerc * (team_score_JBTeam / (field_goals_made_JBTeam + (1 - (1 - (free_throws_made_JBTeam / free_throws_attempted_JBTeam))^2) * 0.4 * free_throws_attempted_JBTeam)),
+    PProd = (PProd_FG_Part + PProd_AST_Part + free_throws_made) * (1 - (offensive_rebounds_JBTeam / Team_Scoring_Poss) * Team_ORB_Weight * Team_PlayPerc) + PProd_ORB_Part,
+    ScPoss = (FG_Part + AST_Part + FT_Part) * (1 - (offensive_rebounds_JBTeam / Team_Scoring_Poss) * Team_ORB_Weight * Team_PlayPerc) + ORB_Part,
+    TotPoss = ScPoss + FGxPoss + FTxPoss + turnovers,
+    ORtg = 100 * (PProd / TotPoss),
+    FloorPercent = ScPoss / TotPoss
+)
+
+jimmyButlerPer100 <- jimmyButlerPer100%>%
+  mutate(
+    career_game_number = row_number()
+  )
+
+```
+
+```{r visualizationJB}
+ggplot(jimmyButlerPer100, aes(x = career_game_number, y = ORtg))+
+ geom_point()+
+  geom_smooth()+
+  labs()
+```
+
+This graph is for Jimmy Butler. He's another "late bloomer" in terms of being a star player as he was drafted to a bulls team that was veyr good and was able to sit behind a full team during his first season. Jimmy also plays the forward position and he lives in a similar age range as Paul George.
+
+```{r melooooo}
+carmeloCareer <- nba_player_box%>% # save data for paul george box scores 
+  select(c("game_id":"team_uid"))%>% # get only certain columns
+  filter(athlete_display_name =="Carmelo Anthony", #only for pg
+         season_type == "2", #only the regular season
+         team_id =="7"| team_id == "18" | team_id == "25" | team_id == "22" | team_id == "13",
+         !is.na(minutes))%>% #remove all star games
+  mutate(team_year = str_c(season,team_id)) #used for factor value later
+
+carmeloteamyears = unique(carmeloCareer$team_year) #factor value of PG years and team
+carmeloGamesPlayed = unique(carmeloCareer$game_id)
+
+nba_team_box <- nba_team_box %>%
+  mutate(team_year = str_c(season,team_id))#make the factor value to sort the game pg is in
+
+carmeloTeam <- nba_team_box%>% #data frame for the team box score
+  select(c("game_id":"turnovers", "team_year"))%>% # select certain columns
+  filter(season_type == "2", game_id %in% carmeloGamesPlayed) #get the games that PG's teams plays 
+carmeloTeamFor <- carmeloTeam%>%
+  filter(team_year %in% carmeloteamyears)
+carmeloTeamAgainst <- carmeloTeam%>%
+  filter(!(team_year %in% carmeloteamyears))
+carmeloTeamBothSides <- carmeloTeamFor %>%
+  left_join(carmeloTeamAgainst, by = "game_id")
+```
+
+```{r per100posCA}
+carmeloTeamPer100 <- carmeloTeamBothSides%>%
+  mutate(possessions_forCATeam = (field_goals_attempted.x-offensive_rebounds.x)+turnovers.x+(.44*free_throws_attempted.x))%>%
+  filter(game_id %in% carmeloGamesPlayed)
+
+carmeloPer100 <- carmeloCareer%>%
+  left_join(carmeloTeamPer100, by = "game_id")%>%
+   rename_all(~sub("\\.x$", "_CATeam", .))%>%
+  rename_all(~sub("\\.y$", "_OtherTeam",.))
+
+
+carmeloPer100 <- carmeloPer100%>%
+  filter(!is.na(minutes))%>%
+  mutate(
+         fgm_per100 = field_goals_made/possessions_forCATeam*100,
+         fga_per100 = field_goals_attempted/possessions_forCATeam*100,
+         fg3m_per100 = three_point_field_goals_made/possessions_forCATeam*100,
+         fg3a_per100 = three_point_field_goals_attempted/possessions_forCATeam*100,
+         fg2m_per100 = ((field_goals_made-three_point_field_goals_made)/possessions_forCATeam)*100,
+         fg2a_per100 = ((field_goals_attempted-three_point_field_goals_attempted)/possessions_forCATeam)*100,
+         ft_per100 = free_throws_made/possessions_forCATeam*100,
+         fta_per100 = free_throws_attempted/possessions_forCATeam*100,
+         oreb_per100 = offensive_rebounds/possessions_forCATeam*100,
+         dreb_per100 = defensive_rebounds/possessions_forCATeam*100,
+         reb_per100 = rebounds/possessions_forCATeam*100,
+         ass_per100 = assists/possessions_forCATeam*100,
+         steals_per100 = steals/possessions_forCATeam*100,
+         blocks_per100 = blocks/possessions_forCATeam*100,
+         turn_per100 = turnovers/possessions_forCATeam*100,
+         fouls_per100 = fouls/possessions_forCATeam*100,
+         points_per100 = points/possessions_forCATeam*100)%>%select(c("game_id":"season_type","athlete_id":"team_name","minutes":"points","athlete_position_abbreviation","team_id_CATeam","team_name_CATeam","team_score_CATeam":"turnovers_CATeam","team_id_OtherTeam", "team_name_OtherTeam","team_score_OtherTeam":"turnovers_OtherTeam","possessions_forCATeam":"points_per100"))
+
+carmeloPer100 <- carmeloPer100%>%
+  mutate(
+    qAST = ((minutes / (48 / 5)) * (1.14 * ((assists_CATeam - assists) / field_goals_made_CATeam))) + ((((assists_CATeam / 48) * minutes * 5 - assists) / ((field_goals_made_CATeam / 48) * minutes * 5 - field_goals_made)) * (1 - (minutes / (48 / 5)))),
+    FG_Part = field_goals_made * (1 - 0.5 * ((points - free_throws_made) / (2 * field_goals_attempted)) * qAST),
+    AST_Part = 0.5 * (((team_score_CATeam - free_throws_made_CATeam) - (points - free_throws_made)) / (2 * (field_goals_attempted_CATeam - field_goals_attempted))) * assists,
+    FT_Part = (1-(1-(free_throws_made/free_throws_attempted))^2)*0.4*free_throws_attempted,
+    Team_Scoring_Poss = field_goals_made_CATeam + (1 - (1 - (free_throws_made_CATeam / free_throws_attempted_CATeam))^2) * free_throws_attempted_CATeam * 0.4,
+    Team_PlayPerc = Team_Scoring_Poss / (field_goals_attempted_CATeam + free_throws_attempted_CATeam * 0.4 + total_turnovers_CATeam),
+    Team_ORBPerc = offensive_rebounds_CATeam / (total_rebounds_CATeam+(total_rebounds_OtherTeam-offensive_rebounds_OtherTeam)),
+    Team_ORB_Weight = ((1 - Team_ORBPerc) * Team_PlayPerc) / ((1 - Team_ORBPerc) * Team_PlayPerc + Team_ORBPerc * (1 - Team_PlayPerc)),
+    ORB_Part = offensive_rebounds * Team_ORB_Weight * Team_PlayPerc,
+    FGxPoss = (field_goals_attempted - field_goals_made) * (1 - 1.07 * Team_ORBPerc),
+    FTxPoss = ((1 - (free_throws_made / free_throws_attempted))^2) * 0.4 * free_throws_attempted,
+    PProd_FG_Part = 2 * (field_goals_made + 0.5 * three_point_field_goals_made) * (1 - 0.5 * ((points - free_throws_made) / (2 * field_goals_attempted)) * qAST),
+    PProd_AST_Part = 2 * ((field_goals_made_CATeam - field_goals_made + 0.5 * (three_point_field_goals_made_CATeam - three_point_field_goals_made)) / (field_goals_made_CATeam - field_goals_made)) * 0.5 * (((team_score_CATeam - free_throws_made_CATeam) - (points - free_throws_made)) / (2 * (field_goals_attempted_CATeam - field_goals_attempted))) * assists
+    )
+
+carmeloPer100$FT_Part[is.na(carmeloPer100$FT_Part)] <- 0
+carmeloPer100$FTxPoss[is.na(carmeloPer100$FTxPoss)] <- 0
+carmeloPer100$PProd_FG_Part[is.na(carmeloPer100$PProd_FG_Part)]<-0
+carmeloPer100$FG_Part[is.na(carmeloPer100$FG_Part)]<- 0
+
+carmeloPer100 <- carmeloPer100%>%
+  mutate(
+    PProd_ORB_Part = offensive_rebounds * Team_ORB_Weight * Team_PlayPerc * (team_score_CATeam / (field_goals_made_CATeam + (1 - (1 - (free_throws_made_CATeam / free_throws_attempted_CATeam))^2) * 0.4 * free_throws_attempted_CATeam)),
+    PProd = (PProd_FG_Part + PProd_AST_Part + free_throws_made) * (1 - (offensive_rebounds_CATeam / Team_Scoring_Poss) * Team_ORB_Weight * Team_PlayPerc) + PProd_ORB_Part,
+    ScPoss = (FG_Part + AST_Part + FT_Part) * (1 - (offensive_rebounds_CATeam / Team_Scoring_Poss) * Team_ORB_Weight * Team_PlayPerc) + ORB_Part,
+    TotPoss = ScPoss + FGxPoss + FTxPoss + turnovers,
+    ORtg = 100 * (PProd / TotPoss),
+    FloorPercent = ScPoss / TotPoss
+)
+
+carmeloPer100 <- carmeloPer100%>%
+  mutate(
+    career_game_number = row_number()
+  )
+
+```
+
+```{r visualization CA}
+ggplot(carmeloPer100, aes(x = career_game_number, y = ORtg))+
+ geom_point()+
+  geom_smooth()+
+  labs()
+```
+
+The graph shows the ORTG of carmelo anthony a player who is considered to be one of the best players in the same position as Paul George in terms of raw scoring. Carmelo unlike paul was drafted to a team that was bad and was expected to be a star player from day one. The use of comparions is due to the age and the position. The main issue using Carmelo is the different ways the people play basketball with Carmelo being a very heavy iso player using footwork and shooting to score his points. This is much different to early career paul george which used his athleticism to his advantage and had to learn how to develop a jump shot and shooting. Before Paul George's injury he was a very explosive player but after the injury he couldnt be as explosive due to age and worse ankle and learned to be a better shooter with his 3 point shot being something that definitely changed
